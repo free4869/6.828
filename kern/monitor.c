@@ -4,12 +4,15 @@
 #include <inc/stdio.h>
 #include <inc/string.h>
 #include <inc/memlayout.h>
+#include <inc/mmu.h>
+#include <inc/types.h>
 #include <inc/assert.h>
 #include <inc/x86.h>
 
 #include <kern/console.h>
 #include <kern/monitor.h>
 #include <kern/kdebug.h>
+#include <kern/pmap.h>
 
 #define CMDBUF_SIZE	80	// enough for one VGA text line
 
@@ -83,11 +86,65 @@ mon_backtrace(int argc, char **argv, struct Trapframe *tf)
 	return 0;
 }
 
+int char2int(char c)
+{
+	if (48 <= c && c <= 57)
+		return c - 48;
+	if ('A' <= c && c <= 'F')
+		return c - 55;
+	if ('a' <= c && c <= 'f')
+		return c - 87;
+	return 0;
+}
+
+int hexaddr2decaddr(char *hexaddr)
+{
+	int i;
+	int result = 0;
+	char *newaddr = hexaddr + 2;
+	int tempret = 0;
+	int len = strlen(newaddr);
+	for (i = 0; i < len; i++, tempret = 0)
+	{
+		tempret = char2int(newaddr[i]);
+		tempret = tempret << ((len - i - 1) * 4);
+		result += tempret;	
+	}
+	return result;
+}
+
+int showmappings(uint32_t vaddr)
+{
+	void* vaddr_ptr = (void*)vaddr;
+	pte_t *pte_entry;
+	if (page_lookup(kern_pgdir, vaddr_ptr, &pte_entry))
+	{
+		void *paddr = (void*)PTE_ADDR(*pte_entry);
+		cprintf("va: %08p    ", vaddr_ptr);
+		cprintf("pa: %08p\n", paddr);
+	}
+	else
+		cprintf("No physical page mapping at %08p\n", vaddr_ptr);
+	return 0;
+}
+
 int
 mon_showmappings(int argc, char **argv, struct Trapframe *tf)
 {
-	cprintf("first args is: %s\n", argv[1]);
-	cprintf("second args is: %s\n", argv[2]);
+	if (argc == 2)
+		showmappings(hexaddr2decaddr(argv[1]));
+	else if (argc == 3)
+	{
+		char *lower_addr = argv[1];
+		char *upper_addr = argv[2];
+		uint32_t low = hexaddr2decaddr(lower_addr);
+		uint32_t high = hexaddr2decaddr(upper_addr);
+		while(low <= high)
+		{
+			showmappings(low);
+			low += PGSIZE;
+		}
+	}
 	return 0;
 }
 
