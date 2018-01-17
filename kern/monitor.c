@@ -4,6 +4,8 @@
 #include <inc/stdio.h>
 #include <inc/string.h>
 #include <inc/memlayout.h>
+#include <inc/mmu.h>
+#include <inc/types.h>
 #include <inc/assert.h>
 #include <inc/x86.h>
 
@@ -11,6 +13,7 @@
 #include <kern/monitor.h>
 #include <kern/kdebug.h>
 #include <kern/trap.h>
+#include <kern/pmap.h>
 
 #define CMDBUF_SIZE	80	// enough for one VGA text line
 
@@ -25,6 +28,8 @@ struct Command {
 static struct Command commands[] = {
 	{ "help", "Display this list of commands", mon_help },
 	{ "kerninfo", "Display information about the kernel", mon_kerninfo },
+	{ "backtrace", "Display information of the kernel stack", mon_backtrace },
+	{ "showmappings", "Show physical address mappings corresponding to specific virtual addresses", mon_showmappings }
 };
 
 /***** Implementations of basic kernel monitor commands *****/
@@ -59,9 +64,90 @@ int
 mon_backtrace(int argc, char **argv, struct Trapframe *tf)
 {
 	// Your code here.
+	cprintf("Stack backtrace:\n");
+	uint32_t val_ebp = read_ebp();
+	uint32_t* ptr;
+	while (val_ebp != 0)
+	{
+		ptr = (uint32_t*)val_ebp;
+		uint32_t eip = *(++ptr);
+		cprintf("ebp %x eip %x args ", val_ebp, eip);
+		struct Eipdebuginfo info;
+		debuginfo_eip((uintptr_t)(*ptr), &info);
+
+		int i;
+		for (i = 0; i < 5; i++)
+		{
+			cprintf("%08x ", *(++ptr));
+		}
+		cprintf("\n");
+		cprintf("%s:%d: %.*s+%u\n", info.eip_file, info.eip_line, info.eip_fn_namelen, info.eip_fn_name, eip - info.eip_fn_addr);
+		val_ebp = *((uint32_t*)val_ebp);
+	}
 	return 0;
 }
 
+int char2int(char c)
+{
+	if (48 <= c && c <= 57)
+		return c - 48;
+	if ('A' <= c && c <= 'F')
+		return c - 55;
+	if ('a' <= c && c <= 'f')
+		return c - 87;
+	return 0;
+}
+
+int hexaddr2decaddr(char *hexaddr)
+{
+	int i;
+	int result = 0;
+	char *newaddr = hexaddr + 2;
+	int tempret = 0;
+	int len = strlen(newaddr);
+	for (i = 0; i < len; i++, tempret = 0)
+	{
+		tempret = char2int(newaddr[i]);
+		tempret = tempret << ((len - i - 1) * 4);
+		result += tempret;	
+	}
+	return result;
+}
+
+int showmappings(uint32_t vaddr)
+{
+	void* vaddr_ptr = (void*)vaddr;
+	pte_t *pte_entry;
+	if (page_lookup(kern_pgdir, vaddr_ptr, &pte_entry))
+	{
+		void *paddr = (void*)PTE_ADDR(*pte_entry);
+		cprintf("va: %08p    ", vaddr_ptr);
+		cprintf("pa: %08p\n", paddr);
+	}
+	else
+		cprintf("No physical page mapping at %08p\n", vaddr_ptr);
+	return 0;
+}
+
+int
+mon_showmappings(int argc, char **argv, struct Trapframe *tf)
+{
+	if (argc == 2)
+		showmappings(hexaddr2decaddr(argv[1]));
+	else if (argc == 3)
+	{
+		char *lower_addr = argv[1];
+		char *upper_addr = argv[2];
+		uint32_t low = hexaddr2decaddr(lower_addr);
+		uint32_t high = hexaddr2decaddr(upper_addr);
+		while(low <= high)
+		{
+			showmappings(low);
+			low += PGSIZE;
+		}
+	}
+	return 0;
+}
 
 
 /***** Kernel monitor command interpreter *****/
